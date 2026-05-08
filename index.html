@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>LINK.IO | Master Ninja Slicer</title>
+    <!-- CrazyGames SDK -->
+    <script src="https://sdk.crazygames.com/crazygames-sdk-v3.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Segoe UI', Tahoma, sans-serif; }
+        canvas { display: block; }
+        
+        /* UI LAYERS */
+        #ui { position: absolute; top: 20px; left: 20px; color: white; pointer-events: none; user-select: none; z-index: 10; }
+        .score-display { font-size: 38px; font-weight: 900; text-shadow: 0 0 15px rgba(0,250,255,0.6); }
+        
+        #leaderboard { 
+            position: absolute; top: 20px; right: 20px; width: 180px; 
+            background: rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.2);
+            color: white; padding: 10px; font-size: 14px; border-radius: 5px;
+        }
+        .lb-entry { display: flex; justify-content: space-between; margin-bottom: 4px; }
+
+        #killFeed { 
+            position: absolute; top: 180px; right: 20px; text-align: right;
+            color: #ff3300; font-weight: bold; font-size: 14px; text-shadow: 0 0 5px #000;
+        }
+
+        .fuel-container { 
+            width: 200px; height: 10px; background: rgba(160,0,255,0.2); 
+            border: 2px solid #a0f; margin-top: 10px; border-radius: 5px; 
+        }
+        #fuelFill { width: 0%; height: 100%; background: #a0f; box-shadow: 0 0 10px #a0f; }
+
+        #deathOverlay { 
+            position: fixed; top:0; left:0; width:100%; height:100%; background:rgba(255,0,0,0.2); 
+            display:none; flex-direction: column; justify-content:center; align-items:center; 
+            color:white; font-size:40px; font-weight:bold; z-index:100; backdrop-filter: blur(4px);
+        }
+    </style>
+</head>
+<body>
+
+    <div id="deathOverlay">
+        <div style="letter-spacing: 10px;">REBOOTING...</div>
+        <div style="font-size: 14px; margin-top: 10px; font-weight: normal; opacity: 0.7;">RE-ESTABLISHING NEURAL LINK</div>
+    </div>
+
+    <div id="ui">
+        <div class="score-display" id="scoreLabel">0000</div>
+        <div class="fuel-container"><div id="fuelFill"></div></div>
+    </div>
+
+    <div id="leaderboard">
+        <div style="border-bottom: 1px solid #444; margin-bottom: 8px; font-weight: bold; color: #00faff;">RANKINGS</div>
+        <div id="lbList"></div>
+    </div>
+
+    <div id="killFeed"></div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const socket = io({
+    transports: ['websocket'],
+    upgrade: false
+});
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        // --- GAME STATE ---
+        let players = {}, orbs = [], powerOrbs = [], particles = [], floatingTexts = [], killMessages = [];
+        let myId = null, isDead = false, worldSize = 4000;
+        let camera = { x: 2000, y: 2000, shake: 0 };
+        let mouse = { x: 0, y: 0, down: false }, spacePressed = false;
+        
+        let me = {
+            x: 2000, y: 2000, vx: 0, vy: 0, lastX: 2000, lastY: 2000,
+            trail: [], score: 200, maxTrail: 15, boostFuel: 0, 
+            color: '#fff', name: 'Connecting...'
+        };
+
+        // --- AUDIO ENGINE ---
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        function playSfx(f, t, d, v) {
+            try {
+                if (audioCtx.state === 'suspended') audioCtx.resume();
+                const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+                o.type = t; o.frequency.setValueAtTime(f, audioCtx.currentTime);
+                o.frequency.exponentialRampToValueAtTime(10, audioCtx.currentTime + d);
+                g.gain.setValueAtTime(v, audioCtx.currentTime);
+                g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + d);
+                o.connect(g); g.connect(audioCtx.destination);
+                o.start(); o.stop(audioCtx.currentTime + d);
+            } catch(e){}
+        }
+
+        // --- INITIALIZATION ---
+        async function initSDK() {
+            let name = "Guest";
+            try {
+                const sdk = window.CrazyGames.SDK;
+                await sdk.init();
+                const user = await sdk.user.getUser();
+                name = user ? user.username : (prompt("Enter Pilot Name:") || "Guest");
+            } catch(e) { name = prompt("Enter Pilot Name:") || "Guest"; }
+            me.name = name;
+            socket.emit('join', { name });
+        }
+        initSDK();
+
+        // --- INPUTS ---
+        window.onmousedown = () => { if(!isDead) mouse.down = true; };
+        window.onmouseup = () => mouse.down = false;
+        window.onmousemove = (e) => { mouse.x = e.clientX; mouse.y = e.clientY; };
+        window.onkeydown = (e) => { if(e.code === "Space") spacePressed = true; };
+        window.onkeyup = (e) => { if(e.code === "Space") spacePressed = false; };
+
+        // --- NETWORK EVENTS ---
+        socket.on('init', (d) => {
+            players = d.players; orbs = d.orbs; powerOrbs = d.powerOrbs;
+            myId = d.myId; worldSize = d.worldSize;
+            me.color = players[myId].color;
+        });
+
+        socket.on('playerMoved', (p) => { if(p.id !== myId) players[p.id] = p; });
+        socket.on('updateOrbs', (o) => orbs = o);
+        socket.on('updatePowerOrbs', (p) => powerOrbs = p);
+        socket.on('removePlayer', (id) => delete players[id]);
+
+        socket.on('syncScore', (d) => {
+            if (d.playerId === myId) me.score = d.newScore;
+            else if (players[d.playerId]) players[d.playerId].score = d.newScore;
+        });
+
+        // SYNCED SLICING FIX: Updates trail for everyone
+        socket.on('doSlice', (d) => {
+            let target = (d.victimId === myId) ? me : players[d.victimId];
+            if (target && target.trail) {
+                target.trail = target.trail.slice(d.sliceIndex + 1);
+                if(d.victimId === myId) me.maxTrail = target.trail.length + 5;
+                
+                playSfx(1000, 'sawtooth', 0.2, 0.1);
+                camera.shake = 15;
+                floatingTexts.push({ x: d.x, y: d.y, text: "+" + d.stolen, life: 1.0, color: '#0f0' });
+                for(let i=0; i<12; i++) spawnParticle(d.x, d.y, target.color, 8);
+            }
+        });
+
+        socket.on('explosion', (d) => {
+            playSfx(100, 'square', 0.5, 0.2);
+            camera.shake = 30;
+            for(let i=0; i<30; i++) spawnParticle(d.x, d.y, d.color, 15);
+        });
+
+        socket.on('forceDeath', () => handleDeath(null));
+
+        socket.on('killMessage', (data) => {
+            let msg = `${data.killer.toUpperCase()} SLICED ${data.victim.toUpperCase()}`;
+            killMessages.push({ text: msg, life: 1.0 });
+            if(killMessages.length > 5) killMessages.shift();
+        });
+
+        function spawnParticle(x, y, color, speed) {
+            particles.push({ x, y, color, vx: (Math.random()-0.5)*speed, vy: (Math.random()-0.5)*speed, life: 1.0 });
+        }
+
+        // --- GAME LOGIC ---
+        function checkCollisions() {
+            if (isDead) return;
+
+            orbs.forEach(o => {
+                if (Math.hypot(me.x - o.x, me.y - o.y) < 35) {
+                    socket.emit('eatOrb', o.id);
+                    me.maxTrail += 3;
+                    playSfx(800, 'sine', 0.1, 0.05);
+                }
+            });
+
+            powerOrbs.forEach(o => {
+                if (Math.hypot(me.x - o.x, me.y - o.y) < 50) {
+                    socket.emit('eatPowerOrb', o.id);
+                    me.boostFuel = 100;
+                    playSfx(400, 'triangle', 0.3, 0.1);
+                }
+            });
+
+            for (let id in players) {
+                if (id === myId) continue;
+                let p = players[id];
+                if (p.trail) {
+                    for (let i = 0; i < p.trail.length; i++) {
+                        if (Math.hypot(me.x - p.trail[i].x, me.y - p.trail[i].y) < 22) {
+                            if (me.score > p.score) {
+                                socket.emit('slicePlayer', { victimId: id, sliceIndex: i });
+                                return; 
+                            } else {
+                                handleDeath(id);
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        function handleDeath(killerId) {
+            if(isDead) return;
+            isDead = true;
+            document.getElementById('deathOverlay').style.display = 'flex';
+            socket.emit('playerDied', killerId);
+            
+            setTimeout(() => {
+                isDead = false;
+                document.getElementById('deathOverlay').style.display = 'none';
+                me.x = Math.random() * worldSize; me.y = Math.random() * worldSize;
+                me.vx = 0; me.vy = 0; me.score = 200; me.trail = []; me.maxTrail = 15; me.boostFuel = 0;
+            }, 3000);
+        }
+
+        // --- MAIN LOOP ---
+        function update() {
+            if (!isDead && myId) {
+                let boosting = spacePressed && me.boostFuel > 0;
+                let accel = boosting ? 0.0028 : 0.0006;
+                if (boosting) me.boostFuel -= 0.8;
+
+                if (mouse.down) {
+                    let worldM = { x: mouse.x + camera.x - canvas.width/2, y: mouse.y + camera.y - canvas.height/2 };
+                    me.vx += (worldM.x - me.x) * accel;
+                    me.vy += (worldM.y - me.y) * accel;
+                }
+                
+                let maxS = boosting ? 7.5 : 2.6;
+                let spd = Math.hypot(me.vx, me.vy);
+                if (spd > maxS) { me.vx = (me.vx/spd)*maxS; me.vy = (me.vy/spd)*maxS; }
+                me.vx *= 0.96; me.vy *= 0.96;
+                me.x += me.vx; me.y += me.vy;
+
+                me.x = Math.max(40, Math.min(me.x, worldSize - 40));
+                me.y = Math.max(40, Math.min(me.y, worldSize - 40));
+
+                if (Math.hypot(me.x - me.lastX, me.y - me.lastY) > 15) {
+                    me.trail.push({ x: me.x, y: me.y });
+                    me.lastX = me.x; me.lastY = me.y;
+                    if (me.trail.length > me.maxTrail) me.trail.shift();
+                }
+
+                checkCollisions();
+                socket.emit('update', { x: me.x, y: me.y, trail: me.trail, score: me.score });
+            }
+
+            camera.x += (me.x - camera.x) * 0.1;
+            camera.y += (me.y - camera.y) * 0.1;
+            if(camera.shake > 0) camera.shake *= 0.9;
+
+            particles.forEach((p, i) => { p.x += p.vx; p.y += p.vy; p.life -= 0.02; if(p.life <= 0) particles.splice(i, 1); });
+            floatingTexts.forEach((t, i) => { t.y -= 1.5; t.life -= 0.02; if(t.life <= 0) floatingTexts.splice(i, 1); });
+            killMessages.forEach((m, i) => { m.life -= 0.005; if(m.life <= 0) killMessages.splice(i,1); });
+
+            updateLeaderboard();
+            draw();
+            requestAnimationFrame(update);
+        }
+
+        function updateLeaderboard() {
+            let all = Object.values(players);
+            all.push(me);
+            all.sort((a,b) => b.score - a.score);
+            let html = "";
+            all.slice(0, 5).forEach((p, i) => {
+                let color = (p.id === myId) ? "#00faff" : "white";
+                html += `<div class="lb-entry" style="color:${color}"><span>${i+1}. ${p.name}</span> <span>${Math.floor(p.score)}</span></div>`;
+            });
+            document.getElementById('lbList').innerHTML = html;
+        }
+
+        function draw() {
+            ctx.fillStyle = '#050505'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.save();
+            let sx = (Math.random()-0.5) * camera.shake, sy = (Math.random()-0.5) * camera.shake;
+            ctx.translate(canvas.width/2 - camera.x + sx, canvas.height/2 - camera.y + sy);
+
+            // GRID
+            ctx.strokeStyle = '#111'; ctx.lineWidth = 2;
+            for(let x=0; x<=worldSize; x+=250) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,worldSize); ctx.stroke(); }
+            for(let y=0; y<=worldSize; y+=250) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(worldSize,y); ctx.stroke(); }
+
+            // BORDER
+            ctx.strokeStyle = '#00faff'; ctx.lineWidth = 25; ctx.strokeRect(0, 0, worldSize, worldSize);
+
+            // ITEMS
+            orbs.forEach(o => { ctx.fillStyle = '#ff0'; ctx.beginPath(); ctx.arc(o.x, o.y, 7, 0, Math.PI*2); ctx.fill(); });
+            powerOrbs.forEach(o => { ctx.fillStyle = '#a0f'; ctx.shadowBlur = 20; ctx.shadowColor = '#a0f'; ctx.beginPath(); ctx.arc(o.x, o.y, 22, 0, Math.PI*2); ctx.fill(); ctx.shadowBlur = 0; });
+
+            // PLAYERS
+            for (let id in players) {
+                let p = (id === myId) ? me : players[id];
+                if (id === myId && isDead) continue;
+
+                // Trail
+                ctx.beginPath(); ctx.strokeStyle = p.color; ctx.lineWidth = 10 + (p.score / 1500);
+                ctx.lineCap = "round"; ctx.lineJoin = "round";
+                if (p.trail && p.trail.length > 0) {
+                    ctx.moveTo(p.trail[0].x, p.trail[0].y);
+                    p.trail.forEach(t => ctx.lineTo(t.x, t.y));
+                    ctx.lineTo(p.x, p.y);
+                }
+                ctx.stroke();
+
+                // Head
+                let hSize = 17 + (p.score/1500);
+                ctx.fillStyle = "white"; ctx.beginPath(); ctx.arc(p.x, p.y, hSize, 0, Math.PI * 2); ctx.fill();
+                ctx.fillStyle = "black"; ctx.font = "bold 13px Arial"; ctx.textAlign = "center";
+                ctx.fillText(Math.floor(p.score), p.x, p.y + 5);
+                ctx.fillStyle = "white"; ctx.font = "bold 16px Arial";
+                ctx.fillText(p.name, p.x, p.y - hSize - 12);
+            }
+
+            // EFFECTS
+            particles.forEach(p => { ctx.globalAlpha = p.life; ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y, 4, 4); });
+            floatingTexts.forEach(t => { ctx.globalAlpha = t.life; ctx.fillStyle = t.color; ctx.font = "bold 26px Arial"; ctx.fillText(t.text, t.x, t.y); });
+            ctx.globalAlpha = 1;
+
+            ctx.restore();
+
+            // KILL FEED UI
+            let kHtml = "";
+            killMessages.forEach(m => { kHtml += `<div style="opacity:${m.life}">${m.text}</div>`; });
+            document.getElementById('killFeed').innerHTML = kHtml;
+
+            document.getElementById('scoreLabel').innerText = Math.floor(me.score).toString().padStart(4, '0');
+            document.getElementById('fuelFill').style.width = me.boostFuel + "%";
+        }
+
+        update();
+        window.onresize = () => { canvas.width = window.innerWidth; canvas.height = window.innerHeight; };
+    </script>
+</body>
+</html>
