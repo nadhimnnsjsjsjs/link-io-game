@@ -12,6 +12,7 @@ let orbs = [];
 let powerOrbs = []; 
 const WORLD_SIZE = 4000;
 
+// World Items
 for (let i = 0; i < 80; i++) orbs.push({ id: i, x: Math.random() * WORLD_SIZE, y: Math.random() * WORLD_SIZE });
 for (let i = 0; i < 6; i++) powerOrbs.push({ id: i, x: Math.random() * WORLD_SIZE, y: Math.random() * WORLD_SIZE });
 
@@ -38,7 +39,6 @@ io.on('connection', (socket) => {
             players[socket.id].x = data.x;
             players[socket.id].y = data.y;
             players[socket.id].trail = data.trail;
-            // Note: We don't update score from client to prevent cheating
         }
     });
 
@@ -46,7 +46,7 @@ io.on('connection', (socket) => {
         const victim = players[data.victimId];
         const attacker = players[socket.id];
         if (victim && attacker && victim.trail.length > 0) {
-            // SECURITY: Only allow slice if attacker is actually stronger
+            // COMBAT RULE: Must be stronger to slice
             if (attacker.score <= victim.score) return;
 
             let sliceIndex = data.sliceIndex;
@@ -54,7 +54,6 @@ io.on('connection', (socket) => {
             let stolen = Math.floor(victim.score * slicePercent);
             
             if (slicePercent > 0.6 || (victim.score - stolen) < 100) {
-                // LETHAL KILL
                 io.emit('explosion', { x: victim.x, y: victim.y, color: victim.color });
                 io.emit('killMessage', { killer: attacker.name, victim: victim.name });
                 attacker.score += victim.score;
@@ -63,11 +62,11 @@ io.on('connection', (socket) => {
                 io.emit('syncScore', { playerId: attacker.id, newScore: attacker.score });
                 io.to(victim.id).emit('forceDeath');
             } else {
-                // PARTIAL SLICE
                 victim.score -= stolen; attacker.score += stolen;
                 io.emit('syncScore', { playerId: victim.id, newScore: victim.score });
                 io.emit('syncScore', { playerId: attacker.id, newScore: attacker.score });
-                io.emit('doSlice', { victimId: data.victimId, sliceIndex: data.sliceIndex, x: victim.x, y: victim.y, stolen: stolen });
+                let pos = victim.trail[sliceIndex];
+                io.emit('doSlice', { victimId: data.victimId, sliceIndex: sliceIndex, x: pos.x, y: pos.y, stolen: stolen });
             }
         }
     });
@@ -82,7 +81,7 @@ io.on('connection', (socket) => {
     socket.on('disconnect', () => { delete players[socket.id]; io.emit('removePlayer', socket.id); });
 });
 
-// Server-Side Heartbeat for Orbs
+// HEARTBEAT - Handles Collisions & Sync
 setInterval(() => {
     Object.values(players).forEach(p => {
         orbs.forEach(o => {
@@ -91,6 +90,7 @@ setInterval(() => {
                 p.score += 50;
                 io.emit('updateOrbs', orbs);
                 io.emit('syncScore', { playerId: p.id, newScore: p.score });
+                io.to(p.id).emit('triggerSound', 'eat');
             }
         });
         powerOrbs.forEach(o => {
@@ -105,4 +105,4 @@ setInterval(() => {
 }, 33);
 
 const PORT = process.env.PORT || 3000;
-http.listen(PORT, '0.0.0.0', () => console.log('SERVER ONLINE'));
+http.listen(PORT, '0.0.0.0', () => console.log('ULTIMATE SERVER ONLINE'));
