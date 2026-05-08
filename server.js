@@ -2,23 +2,18 @@ const express = require('express');
 const app = express();
 const http = require('http').Server(app);
 const io = require('socket.io')(http);
-const path = require('path'); // Add this
+const path = require('path');
 
-// 1. Tell the server where your files are
 app.use(express.static(path.join(__dirname, './')));
-
-// 2. Explicitly serve index.html when someone visits the main link
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'index.html'));
-});
+app.get('/', (req, res) => { res.sendFile(path.join(__dirname, 'index.html')); });
 
 let players = {};
 let orbs = [];
 let powerOrbs = []; 
 const WORLD_SIZE = 4000;
 
-for (let i = 0; i < 80; i++) orbs.push({ id: i, x: Math.random() * WORLD_SIZE, y: Math.random() * WORLD_SIZE });
-for (let i = 0; i < 6; i++) powerOrbs.push({ id: i, x: Math.random() * WORLD_SIZE, y: Math.random() * WORLD_SIZE });
+for (let i = 0; i < 70; i++) orbs.push({ id: i, x: Math.random() * WORLD_SIZE, y: Math.random() * WORLD_SIZE });
+for (let i = 0; i < 5; i++) powerOrbs.push({ id: i, x: Math.random() * WORLD_SIZE, y: Math.random() * WORLD_SIZE });
 
 function getUniqueColor(id) {
     let hash = 0;
@@ -31,11 +26,8 @@ io.on('connection', (socket) => {
         players[socket.id] = {
             id: socket.id,
             name: userData.name || "Guest",
-            x: Math.random() * WORLD_SIZE, 
-            y: Math.random() * WORLD_SIZE,
-            trail: [], 
-            color: getUniqueColor(socket.id), 
-            score: 200 
+            x: Math.random() * WORLD_SIZE, y: Math.random() * WORLD_SIZE,
+            trail: [], color: getUniqueColor(socket.id), score: 200
         };
         socket.emit('init', { players, orbs, powerOrbs, myId: socket.id, worldSize: WORLD_SIZE });
         socket.broadcast.emit('newPlayer', players[socket.id]);
@@ -47,6 +39,7 @@ io.on('connection', (socket) => {
             players[socket.id].y = data.y;
             players[socket.id].trail = data.trail;
             players[socket.id].score = data.score;
+            // Broadcast to others less frequently or only on change
             socket.broadcast.emit('playerMoved', players[socket.id]);
         }
     });
@@ -62,7 +55,7 @@ io.on('connection', (socket) => {
     });
 
     socket.on('eatPowerOrb', (id) => {
-        if (powerOrbs[id]) {
+        if (powerOrbs[id] && players[socket.id]) {
             powerOrbs[id].x = Math.random() * WORLD_SIZE;
             powerOrbs[id].y = Math.random() * WORLD_SIZE;
             io.emit('updatePowerOrbs', powerOrbs);
@@ -73,15 +66,14 @@ io.on('connection', (socket) => {
         const victim = players[data.victimId];
         const attacker = players[socket.id];
         if (victim && attacker && victim.trail.length > 0) {
-            let sliceIndex = data.sliceIndex;
-            let slicePercent = (sliceIndex + 1) / victim.trail.length;
+            let slicePercent = (data.sliceIndex + 1) / victim.trail.length;
             let stolen = Math.floor(victim.score * slicePercent);
+            
             if (slicePercent > 0.6 || (victim.score - stolen) < 100) {
                 io.emit('explosion', { x: victim.x, y: victim.y, color: victim.color });
                 io.emit('killMessage', { killer: attacker.name, victim: victim.name });
                 attacker.score += victim.score;
-                victim.score = 200;
-                victim.trail = [];
+                victim.score = 200; victim.trail = [];
                 io.emit('syncScore', { playerId: victim.id, newScore: 200 });
                 io.emit('syncScore', { playerId: attacker.id, newScore: attacker.score });
                 io.to(victim.id).emit('forceDeath');
@@ -90,29 +82,20 @@ io.on('connection', (socket) => {
                 attacker.score += stolen;
                 io.emit('syncScore', { playerId: victim.id, newScore: victim.score });
                 io.emit('syncScore', { playerId: attacker.id, newScore: attacker.score });
-                let pos = victim.trail[sliceIndex];
-                io.emit('doSlice', { victimId: data.victimId, sliceIndex: sliceIndex, x: pos.x, y: pos.y, stolen: stolen });
+                io.emit('doSlice', { victimId: data.victimId, sliceIndex: data.sliceIndex, x: victim.trail[data.sliceIndex].x, y: victim.trail[data.sliceIndex].y, stolen: stolen });
             }
         }
     });
 
     socket.on('playerDied', (killerId) => {
         if (players[socket.id]) {
-            let p = players[socket.id];
-            io.emit('explosion', { x: p.x, y: p.y, color: p.color });
-            p.score = 200; p.trail = [];
+            players[socket.id].score = 200; players[socket.id].trail = [];
             io.emit('syncScore', { playerId: socket.id, newScore: 200 });
         }
     });
 
-    socket.on('disconnect', () => {
-        delete players[socket.id];
-        io.emit('removePlayer', socket.id);
-    });
+    socket.on('disconnect', () => { delete players[socket.id]; io.emit('removePlayer', socket.id); });
 });
 
-// IMPORTANT: Render uses process.env.PORT
 const PORT = process.env.PORT || 3000;
-http.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on port ${PORT}`);
-});
+http.listen(PORT, '0.0.0.0', () => { console.log(`Server running on port ${PORT}`); });
