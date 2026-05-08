@@ -1,18 +1,17 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <title>LINK.IO | Optimized</title>
+    <title>LINK.IO | Final Build</title>
     <script src="https://sdk.crazygames.com/crazygames-sdk-v3.js"></script>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
         canvas { display: block; }
         #ui { position: absolute; top: 20px; left: 20px; color: white; pointer-events: none; z-index: 10; }
-        #deathOverlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255,0,0,0.3); display: none; flex-direction: column; justify-content: center; align-items: center; color: white; font-size: 30px; z-index: 100; }
+        #deathOverlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255,0,0,0.4); display: none; flex-direction: column; justify-content: center; align-items: center; color: white; font-size: 30px; z-index: 100; }
     </style>
 </head>
 <body>
-    <div id="deathOverlay">SYSTEM REBOOTING...</div>
+    <div id="deathOverlay">REBOOTING SYSTEM...</div>
     <div id="ui"><h1 id="scoreLabel">0200</h1></div>
     <canvas id="gameCanvas"></canvas>
 
@@ -20,25 +19,26 @@
     <script>
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
-        const socket = io({ transports: ['websocket'] }); // Faster transport
+        const socket = io(); 
         canvas.width = window.innerWidth; canvas.height = window.innerHeight;
 
-        let players = {}, orbs = [], powerOrbs = [], particles = [], myId = null, isDead = false;
-        let worldSize = 4000, camera = { x: 2000, y: 2000, shake: 0 };
-        let me = { x: 2000, y: 2000, vx: 0, vy: 0, lastX: 2000, lastY: 2000, trail: [], score: 200, maxTrail: 15, boostFuel: 0, color: '#fff', name: '' };
+        let players = {}, orbs = [], powerOrbs = [], myId = null, isDead = false;
+        let worldSize = 4000, camera = { x: 2000, y: 2000 };
         let mouse = { x: 0, y: 0, down: false }, spacePressed = false;
+        
+        let me = { x: 2000, y: 2000, vx: 0, vy: 0, lastX: 2000, lastY: 2000, trail: [], score: 200, maxTrail: 15, boostFuel: 0, color: '#fff', name: 'Guest' };
 
-        async function init() {
-            let n = "Guest";
+        async function initSDK() {
             try {
-                const sdk = window.CrazyGames.SDK; await sdk.init();
+                const sdk = window.CrazyGames.SDK;
+                await sdk.init();
                 const user = await sdk.user.getUser();
-                n = user ? user.username : (prompt("Name:") || "Guest");
-            } catch(e) { n = prompt("Name:") || "Guest"; }
-            me.name = n;
-            socket.emit('join', { name: n });
+                if (user) me.name = user.username;
+                else me.name = prompt("Nickname:") || "Guest";
+            } catch(e) { me.name = prompt("Nickname:") || "Guest"; }
+            socket.emit('join', { name: me.name });
         }
-        init();
+        initSDK();
 
         window.onmousedown = () => { if(!isDead) mouse.down = true; };
         window.onmouseup = () => mouse.down = false;
@@ -61,11 +61,10 @@
         function handleDeath() {
             if(isDead) return; isDead = true;
             document.getElementById('deathOverlay').style.display = 'flex';
-            socket.emit('playerDied');
             setTimeout(() => {
                 isDead = false; document.getElementById('deathOverlay').style.display = 'none';
                 me.x = Math.random()*worldSize; me.y = Math.random()*worldSize;
-                me.vx = 0; me.vy = 0; me.score = 200; me.trail = []; me.maxTrail = 15;
+                me.score = 200; me.trail = []; me.maxTrail = 15; me.vx = 0; me.vy = 0;
             }, 3000);
         }
 
@@ -88,28 +87,24 @@
                 me.y = Math.max(50, Math.min(me.y, worldSize - 50));
 
                 if (Math.hypot(me.x - me.lastX, me.y - me.lastY) > 15) {
-                    me.trail.push({ x: me.x, y: me.y });
-                    me.lastX = me.x; me.lastY = me.y;
-                    // LIMIT TAIL GROWTH HERE
+                    me.trail.push({ x: me.x, y: me.y }); me.lastX = me.x; me.lastY = me.y;
                     if (me.trail.length > me.maxTrail) me.trail.shift();
-                    if (me.trail.length > 300) me.trail.shift(); // Hard cap
                 }
 
-                // Accurate Collisions
+                // Collisions
                 orbs.forEach(o => { if(Math.hypot(me.x-o.x, me.y-o.y) < 40) socket.emit('eatOrb', o.id); });
                 powerOrbs.forEach(o => { if(Math.hypot(me.x-o.x, me.y-o.y) < 50) { socket.emit('eatPowerOrb', o.id); me.boostFuel = 100; } });
                 
                 for(let id in players) {
+                    if(id === myId) continue;
                     let p = players[id];
-                    if(id !== myId && p.trail) {
+                    if(p.trail) {
                         p.trail.forEach((seg, index) => {
                             if(Math.hypot(me.x-seg.x, me.y-seg.y) < 25) socket.emit('slicePlayer', {victimId: id, sliceIndex: index});
                         });
                     }
                 }
-                
-                // THROTTLE NETWORK: Send update only 30 times per second to stop bugging
-                if(Date.now() % 2 === 0) socket.emit('update', { x: me.x, y: me.y, trail: me.trail, score: me.score });
+                socket.emit('update', { x: me.x, y: me.y, trail: me.trail, score: me.score });
             }
             camera.x += (me.x - camera.x) * 0.1; camera.y += (me.y - camera.y) * 0.1;
             draw();
@@ -126,7 +121,7 @@
                 let p = (id === myId) ? me : players[id];
                 if(id === myId && isDead) continue;
                 ctx.beginPath(); ctx.strokeStyle = p.color; ctx.lineWidth = 10 + (p.score/2000);
-                if(p.trail.length > 0) { ctx.moveTo(p.trail[0].x, p.trail[0].y); p.trail.forEach(t => ctx.lineTo(t.x, t.y)); ctx.lineTo(p.x, p.y); }
+                if(p.trail && p.trail.length > 0) { ctx.moveTo(p.trail[0].x, p.trail[0].y); p.trail.forEach(t => ctx.lineTo(t.x, t.y)); ctx.lineTo(p.x, p.y); }
                 ctx.stroke();
                 let s = 16 + (p.score/2000);
                 ctx.fillStyle = "white"; ctx.beginPath(); ctx.arc(p.x, p.y, s, 0, Math.PI*2); ctx.fill();
