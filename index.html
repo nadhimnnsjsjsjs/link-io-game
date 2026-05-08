@@ -3,49 +3,26 @@
 <head>
     <meta charset="UTF-8">
     <title>LINK.IO | Ultimate Master Build</title>
-    <!-- CrazyGames SDK v3 -->
     <script src="https://sdk.crazygames.com/crazygames-sdk-v3.js"></script>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: 'Segoe UI', Tahoma, sans-serif; }
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Segoe UI', sans-serif; }
         canvas { display: block; }
-        
-        /* UI Elements */
         #ui { position: absolute; top: 20px; left: 20px; color: white; pointer-events: none; user-select: none; z-index: 10; }
         .score-box { font-size: 38px; font-weight: 900; text-shadow: 0 0 15px rgba(0,250,255,0.6); }
-        
-        #leaderboard { 
-            position: absolute; top: 20px; right: 20px; width: 190px; 
-            background: rgba(0,0,0,0.7); border: 1px solid #333;
-            color: #00faff; padding: 10px; font-size: 13px; border-radius: 5px;
-        }
+        #leaderboard { position: absolute; top: 20px; right: 20px; width: 190px; background: rgba(0,0,0,0.7); border: 1px solid #333; color: #00faff; padding: 10px; font-size: 13px; border-radius: 5px; }
         .lb-item { display: flex; justify-content: space-between; margin-bottom: 3px; }
-
-        #killFeed { 
-            position: absolute; top: 200px; right: 20px; text-align: right;
-            color: #ff3300; font-weight: bold; font-size: 14px; text-shadow: 0 0 5px #000;
-        }
-
+        #killFeed { position: absolute; top: 200px; right: 20px; text-align: right; color: #ff3300; font-weight: bold; font-size: 14px; text-shadow: 0 0 5px #000; }
         .fuel-wrap { width: 200px; height: 10px; background: rgba(160,0,255,0.2); border: 2px solid #a0f; margin-top: 8px; border-radius: 5px; }
         #fuelFill { width: 0%; height: 100%; background: #a0f; box-shadow: 0 0 10px #a0f; }
-
-        #deathOverlay { 
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
-            background: rgba(255,0,0,0.3); display: none; flex-direction: column; 
-            justify-content: center; align-items: center; color: white; z-index: 100;
-            backdrop-filter: blur(5px);
-        }
+        #deathOverlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255,0,0,0.3); display: none; flex-direction: column; justify-content: center; align-items: center; color: white; font-size: 40px; font-weight: bold; z-index: 100; backdrop-filter: blur(5px); }
     </style>
 </head>
 <body>
 
-    <div id="deathOverlay">
-        <div style="font-size: 40px; font-weight: bold; letter-spacing: 5px;">SYSTEM FAILURE</div>
-        <div style="font-size: 14px; opacity: 0.7;">RE-ESTABLISHING NEURAL LINK...</div>
-    </div>
+    <div id="deathOverlay">SYSTEM FAILURE</div>
 
     <div id="ui">
         <div class="score-box" id="scoreLabel">0200</div>
-        <div id="lvlLabel" style="color: #a0f; font-weight: bold; margin-top: 5px;">RANK: 1</div>
         <div class="fuel-wrap"><div id="fuelFill"></div></div>
     </div>
 
@@ -63,20 +40,18 @@
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
         const socket = io({ transports: ['websocket'] });
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
+        canvas.width = window.innerWidth; canvas.height = window.innerHeight;
 
         // --- GLOBAL STATE ---
         let players = {}, orbs = [], powerOrbs = [], particles = [], floatingTexts = [], killMessages = [];
         let myId = null, isDead = false, worldSize = 4000;
         let camera = { x: 2000, y: 2000, shake: 0 };
+        let mouse = { x: 0, y: 0, down: false }, spacePressed = false;
         
         let me = {
             x: 2000, y: 2000, vx: 0, vy: 0, lastX: 2000, lastY: 2000,
             trail: [], score: 200, boostFuel: 0, color: '#fff', name: 'Connecting...', lastLvl: 1
         };
-
-        let mouse = { x: 0, y: 0, down: false }, spacePressed = false;
 
         // --- AUDIO ENGINE ---
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -101,7 +76,7 @@
             lvlUp: () => { playSfx(500, 'sine', 0.4, 0.2, false); setTimeout(()=>playSfx(800, 'sine', 0.5, 0.2, false), 150); }
         };
 
-        // --- CRAZYGAMES SDK & JOIN ---
+        // --- SDK & INITIALIZATION ---
         async function init() {
             let n = "Guest";
             try {
@@ -122,11 +97,10 @@
         window.onkeydown = (e) => { if(e.code === "Space") spacePressed = true; };
         window.onkeyup = (e) => { if(e.code === "Space") spacePressed = false; };
 
-        // --- NETWORK LISTENERS ---
+        // --- SOCKETS ---
         socket.on('init', (d) => {
             players = d.players; orbs = d.orbs; powerOrbs = d.powerOrbs;
-            myId = d.myId; worldSize = d.worldSize;
-            me.color = players[myId].color;
+            myId = d.myId; worldSize = d.worldSize; me.color = players[myId].color;
         });
 
         socket.on('state', (serverPlayers) => {
@@ -135,7 +109,6 @@
 
         socket.on('updateOrbs', (o) => orbs = o);
         socket.on('updatePowerOrbs', (p) => powerOrbs = p);
-        socket.on('removePlayer', (id) => delete players[id]);
         
         socket.on('syncScore', (d) => { 
             if(d.playerId === myId) {
@@ -153,7 +126,7 @@
         socket.on('doSlice', (d) => {
             let target = (d.victimId === myId) ? me : players[d.victimId];
             if (target && target.trail) {
-                // TAIL SHRINKING LOGIC
+                // FORCE THE TAIL TO CUT LOCALLY
                 target.trail = target.trail.slice(d.sliceIndex + 1);
                 camera.shake = 15; sfx.slice();
                 floatingTexts.push({ x: d.x, y: d.y, text: "+" + d.stolen, life: 1.0, color: '#0f0' });
@@ -183,7 +156,7 @@
             }, 3000);
         }
 
-        // --- UPDATE LOOP ---
+        // --- UPDATE ---
         function update() {
             if (!isDead && myId) {
                 let boosting = spacePressed && me.boostFuel > 0;
@@ -195,24 +168,22 @@
                     me.vx += (worldM.x - me.x) * accel; me.vy += (worldM.y - me.y) * accel;
                 }
                 
-                let maxS = boosting ? 7.5 : 2.6;
+                let maxS = boosting ? 7.5 : 2.5;
                 let spd = Math.hypot(me.vx, me.vy);
                 if (spd > maxS) { me.vx = (me.vx/spd)*maxS; me.vy = (me.vy/spd)*maxS; }
                 me.vx *= 0.96; me.vy *= 0.96; me.x += me.vx; me.y += me.vy;
                 
-                // Borders
                 me.x = Math.max(50, Math.min(me.x, worldSize - 50));
                 me.y = Math.max(50, Math.min(me.y, worldSize - 50));
 
-                // TAIL GROWTH LOGIC: Trail length is tied to Score
+                // Trail Logic: Growth based on Score
                 if (Math.hypot(me.x - me.lastX, me.y - me.lastY) > 15) {
                     me.trail.push({ x: me.x, y: me.y });
                     me.lastX = me.x; me.lastY = me.y;
-                    // Formula for length: Base 15 + (Score / 100)
-                    if (me.trail.length > 15 + (me.score / 100)) me.trail.shift();
+                    if (me.trail.length > 20 + (me.score / 100)) me.trail.shift();
                 }
 
-                // Combat Logic: Slice or Die
+                // Combat check
                 for(let id in players) {
                     let p = players[id];
                     if(id !== myId && p.trail) {
@@ -229,8 +200,6 @@
 
             camera.x += (me.x - camera.x) * 0.1; camera.y += (me.y - camera.y) * 0.1;
             if(camera.shake > 0) camera.shake *= 0.9;
-            
-            // Cleanup VFX
             particles.forEach((p, i) => { p.x += p.vx; p.y += p.vy; p.life -= 0.02; if(p.life <= 0) particles.splice(i, 1); });
             floatingTexts.forEach((t, i) => { t.y -= 1.5; t.life -= 0.02; if(t.life <= 0) floatingTexts.splice(i, 1); });
             killMessages.forEach((m, i) => { m.life -= 0.005; if(m.life <= 0) killMessages.splice(i, 1); });
@@ -239,35 +208,28 @@
             requestAnimationFrame(update);
         }
 
+        // --- DRAW ---
         function draw() {
             ctx.fillStyle = '#050505'; ctx.fillRect(0, 0, canvas.width, canvas.height);
             ctx.save();
             let sx = (Math.random()-0.5)*camera.shake, sy = (Math.random()-0.5)*camera.shake;
             ctx.translate(canvas.width/2 - camera.x + sx, canvas.height/2 - camera.y + sy);
             
-            // Background Grid
+            // Grid
             ctx.strokeStyle = '#111'; ctx.lineWidth = 2;
             for(let x=0; x<=worldSize; x+=250) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,worldSize); ctx.stroke(); }
             for(let y=0; y<=worldSize; y+=250) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(worldSize,y); ctx.stroke(); }
-            
-            // World Border
             ctx.strokeStyle = '#00faff'; ctx.lineWidth = 25; ctx.strokeRect(0, 0, worldSize, worldSize);
 
-            // Map Items
-            orbs.forEach(o => { ctx.fillStyle = '#ff0'; ctx.beginPath(); ctx.arc(o.x, o.y, 8, 0, Math.PI*2); ctx.fill(); });
-            powerOrbs.forEach(o => { 
-                ctx.fillStyle = '#a0f'; ctx.shadowBlur = 20; ctx.shadowColor = '#a0f';
-                ctx.beginPath(); ctx.arc(o.x, o.y, 22, 0, Math.PI*2); ctx.fill(); 
-                ctx.shadowBlur = 0;
-            });
+            orbs.forEach(o => { ctx.fillStyle = '#ff0'; ctx.beginPath(); ctx.arc(o.x, o.y, 10, 0, Math.PI*2); ctx.fill(); });
+            powerOrbs.forEach(o => { ctx.fillStyle = '#a0f'; ctx.shadowBlur = 20; ctx.shadowColor = '#a0f'; ctx.beginPath(); ctx.arc(o.x, o.y, 25, 0, Math.PI*2); ctx.fill(); ctx.shadowBlur = 0; });
 
-            // Players & Trails
             for (let id in players) {
                 let p = (id === myId) ? me : players[id];
                 if (id === myId && isDead) continue;
                 
-                // Draw Tail
-                ctx.beginPath(); ctx.strokeStyle = p.color; ctx.lineWidth = 10 + (p.score / 1800);
+                // Trail Ribbon
+                ctx.beginPath(); ctx.strokeStyle = p.color; ctx.lineWidth = 12 + (p.score / 1800);
                 ctx.lineCap = "round"; ctx.lineJoin = "round";
                 if (p.trail && p.trail.length > 0) {
                     ctx.moveTo(p.trail[0].x, p.trail[0].y);
@@ -276,38 +238,28 @@
                 }
                 ctx.stroke();
 
-                // Draw Head
+                // Head
                 let hSize = 18 + (p.score/2000);
                 ctx.fillStyle = "white"; ctx.beginPath(); ctx.arc(p.x, p.y, hSize, 0, Math.PI * 2); ctx.fill();
-                
-                // Text Details
-                ctx.fillStyle = "black"; ctx.font = "bold 14px Arial"; ctx.textAlign = "center";
-                ctx.fillText(Math.floor(p.score), p.x, p.y + 5);
-                ctx.fillStyle = "white"; ctx.font = "bold 16px Arial";
-                ctx.fillText(p.name, p.x, p.y - hSize - 12);
+                ctx.fillStyle = "black"; ctx.font = "bold 14px Arial"; ctx.textAlign = "center"; ctx.fillText(Math.floor(p.score), p.x, p.y + 5);
+                ctx.fillStyle = "white"; ctx.font = "bold 16px Arial"; ctx.fillText(p.name, p.x, p.y - hSize - 12);
             }
 
-            // VFX Draw
             particles.forEach(p => { ctx.globalAlpha = p.life; ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y, 4, 4); });
-            floatingTexts.forEach(t => { ctx.globalAlpha = t.life; ctx.fillStyle = t.color; ctx.font = "bold 26px Arial"; ctx.fillText(t.text, t.x, t.y); });
+            floatingTexts.forEach(t => { ctx.globalAlpha = t.life; ctx.fillStyle = "#0f0"; ctx.font = "bold 24px Arial"; ctx.fillText(t.text, t.x, t.y); });
             ctx.globalAlpha = 1;
-
             ctx.restore();
 
-            // UI Overlays
+            // UI
             let all = Object.values(players); all.push(me); all.sort((a,b) => b.score - a.score);
             let lbHtml = ""; all.slice(0, 5).forEach((p, i) => lbHtml += `<div class="lb-item"><span>${i+1}. ${p.name}</span><span>${Math.floor(p.score)}</span></div>`);
             document.getElementById('lbList').innerHTML = lbHtml;
-
             let kHtml = ""; killMessages.forEach(m => kHtml += `<div style="opacity:${m.life}">${m.text}</div>`);
             document.getElementById('killFeed').innerHTML = kHtml;
-
             document.getElementById('scoreLabel').innerText = Math.floor(me.score).toString().padStart(4, '0');
-            document.getElementById('lvlLabel').innerText = "RANK: " + (Math.floor(me.score / 1000) + 1);
             document.getElementById('fuelFill').style.width = me.boostFuel + "%";
         }
         update();
-        window.onresize = () => { canvas.width = window.innerWidth; canvas.height = window.innerHeight; };
     </script>
 </body>
 </html>
